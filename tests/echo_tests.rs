@@ -1,18 +1,22 @@
 use anyhow::{Context, Result};
 use bytes::{BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
+use rand::Rng;
 use snowflakes::{SnowFlakes, WinterFramed};
-use tokio::time::Instant;
 use std::net::Ipv4Addr as addr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
-use rand::Rng;
+use tokio::time::Instant;
 
 const PATTERN: &str = "Noise_NK_25519_AESGCM_SHA256";
 
 const FLAKE_SIZE: usize = 1 << 24;
 
-async fn echo_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>) -> Result<()> {
+async fn get_ready_server(
+    port: u16,
+    done: oneshot::Sender<()>,
+    private_key: Vec<u8>,
+) -> Result<SnowFlakes<TcpStream>> {
     let listener = TcpListener::bind((addr::LOCALHOST, port)).await?;
     done.send(()).unwrap();
     let (stream, _addr) = listener.accept().await?;
@@ -33,16 +37,30 @@ async fn echo_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>)
         .await
         .context("Send initial message failed.")?;
 
-    let mut snowflakes = winter_framed
+    Ok(winter_framed
         .into_snow_framed()?
-        .into_snow_flakes(FLAKE_SIZE);
+        .into_snow_flakes(FLAKE_SIZE))
+}
 
+async fn echo_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>) -> Result<()> {
+    let mut snowflakes = get_ready_server(port, done, private_key).await?;
     loop {
         let msg = match snowflakes.next().await {
             Some(x) => x?,
             None => break,
         };
         snowflakes.send(msg.freeze()).await?;
+    }
+    Ok(())
+}
+
+async fn bench_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>) -> Result<()> {
+    let mut snowflakes = get_ready_server(port, done, private_key).await?;
+    loop {
+        let _msg = match snowflakes.next().await {
+            Some(x) => x?,
+            None => break,
+        };
     }
     Ok(())
 }
@@ -149,25 +167,32 @@ async fn strange_client(port: u16, public_key: Vec<u8>) -> Result<()> {
 }
 
 async fn bench_client(port: u16, public_key: Vec<u8>) -> Result<()> {
+    const ROUND: usize = 100;
     let mut snow_flakes = get_ready_client(port, public_key).await?;
     let mut rng = rand::thread_rng();
     let random: Vec<u8> = (0..FLAKE_SIZE).map(|_| rng.gen::<u8>()).collect();
+    let random = {
+        let mut x = BytesMut::with_capacity(FLAKE_SIZE);
+        x.put_slice(&random);
+        x
+    };
+    let random = random.freeze();
     println!("begins");
     let time = Instant::now();
-    for _ in 0..100 {
-        snow_flakes.send(random.clone().into()).await.unwrap();
-        let byte = snow_flakes.next().await.unwrap().unwrap();
-        assert_eq!(byte.len(), random.len());
-        // println!("{}", time.elapsed().as_secs_f32());
+    for _ in 0..ROUND {
+        snow_flakes.send(random.clone()).await.unwrap();
     }
     let elapsed = time.elapsed();
     let time = elapsed.as_secs_f32();
-    let total = random.len() * 100;
-    println!("time: {}, size_bytes: {}, {}MB/s", time, total, total as f32 / time / 1024. / 1024.);
+    let total = random.len() * ROUND;
+    println!(
+        "time: {}, size_bytes: {}, {}MB/s",
+        time,
+        total,
+        total as f32 / time / 1024. / 1024.
+    );
     Ok(())
 }
-
-
 
 fn generate() -> snow::Keypair {
     snow::Builder::new(PATTERN.parse().unwrap())
@@ -221,7 +246,7 @@ async fn benchmark() -> Result<()> {
     let (sender, receiver) = oneshot::channel();
     let snow::Keypair { public, private } = generate();
     let server_handle =
-        tokio::spawn(async move { echo_server(port, sender, private).await.unwrap() });
+        tokio::spawn(async move { bench_server(port, sender, private).await.unwrap() });
     receiver.await?;
     bench_client(port, public).await?;
     server_handle.await?;

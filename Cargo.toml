@@ -19,5 +19,5 @@ tokio-rw-stream-sink = { path = "../tokio-rw-stream-sink" }
 anyhow = "1.0"
 clap = "3.0.0-beta.5"
 tokio = { version = "1.13", features = ["full"] }
-snow = "0.8"
+snow = { version = "0.8", features = ["ring-resolver"], default-features = false }
 rand = "0.8.4"

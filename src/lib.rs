@@ -15,6 +15,10 @@ use tokio_util::codec::LengthDelimitedCodec;
 
 pub type SnowFlakes<S> = Framed<RwStreamSink<SnowFramed<S>>, LengthDelimitedCodec>;
 
+const NOISE_MSG_LEN: usize = 65535;
+const TAG_LEN: usize = 16;
+const HANDSHAKE_LEN: usize = 48;
+
 pin_project! {
     pub struct WinterFramed<S> {
         #[pin]
@@ -31,7 +35,7 @@ where
         let frame = LengthDelimitedCodec::builder()
             .little_endian()
             .length_field_length(2)
-            .max_frame_length(65535)
+            .max_frame_length(NOISE_MSG_LEN)
             .new_framed(stream);
         Self { frame, handshake }
     }
@@ -58,7 +62,7 @@ where
     /// item.length <= 65535 - 48
     fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
         let this = self.project();
-        let crypto_len = item.len() + 48;
+        let crypto_len = item.len() + HANDSHAKE_LEN;
         let mut crypto_item = BytesMut::with_capacity(crypto_len);
         crypto_item.resize(crypto_len, 0);
         let ret = this
@@ -93,30 +97,35 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let msg = this.frame.poll_next(cx);
-        let msg = ready!(msg);
-        Poll::Ready(match msg {
-            Some(Ok(crypto_item)) => {
-                assert!(crypto_item.len() >= 48);
-                let len = crypto_item.len() - 48;
-                let mut item = BytesMut::with_capacity(len);
-                item.resize(len, 0);
-                let ret = this
-                    .handshake
-                    .read_message(crypto_item.as_ref(), item.as_mut());
-                Some(match ret {
-                    Ok(x) => {
-                        debug_assert_eq!(x, len);
-                        Ok(item)
-                    }
-                    Err(e) => Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("snow read msg error: {}", e),
-                    )),
-                })
+        let encrypted_msg = match ready!(this.frame.poll_next(cx)) {
+            Some(Ok(x)) => x,
+            x @ Some(Err(_)) => return Poll::Ready(x),
+            x @ None => return Poll::Ready(x),
+        };
+        if encrypted_msg.len() < HANDSHAKE_LEN {
+            return Poll::Ready(Some(Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("message doesn't have AEAD: {:?}", encrypted_msg),
+            ))));
+        }
+        let len = encrypted_msg.len() - HANDSHAKE_LEN;
+        let mut item = BytesMut::with_capacity(len);
+        item.resize(len, 0);
+
+        let ret = this
+            .handshake
+            .read_message(encrypted_msg.as_ref(), item.as_mut());
+
+        match ret {
+            Ok(x) => debug_assert_eq!(x, len),
+            Err(e) => {
+                return Poll::Ready(Some(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("snow read msg error: {}", e),
+                ))))
             }
-            x => x,
-        })
+        }
+        Poll::Ready(Some(Ok(item)))
     }
 }
 
@@ -156,10 +165,10 @@ where
     fn start_send(self: Pin<&mut Self>, mut item: Bytes) -> Result<(), Self::Error> {
         let mut this = self.project();
         loop {
-            let chunk_len = item.len().min(65535 - 16);
+            let chunk_len = item.len().min(NOISE_MSG_LEN - TAG_LEN);
             let chunk = item.split_to(chunk_len);
 
-            let crypto_len = chunk_len + 16;
+            let crypto_len = chunk_len + TAG_LEN;
             let mut crypto_item = BytesMut::with_capacity(crypto_len);
             crypto_item.resize(crypto_len, 0);
             let ret = this
@@ -175,6 +184,7 @@ where
                     ))
                 }
             }
+
             Pin::new(&mut this.frame).start_send(crypto_item.freeze())?;
 
             if item.is_empty() {
@@ -201,29 +211,34 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let msg = this.frame.poll_next(cx);
-        let msg = ready!(msg);
-        Poll::Ready(match msg {
-            Some(Ok(crypto_item)) => {
-                assert!(crypto_item.len() >= 16);
-                let len = crypto_item.len() - 16;
-                let mut item = BytesMut::with_capacity(len);
-                item.resize(len, 0);
-                let ret = this
-                    .transport
-                    .read_message(crypto_item.as_ref(), item.as_mut());
-                Some(match ret {
-                    Ok(x) => {
-                        debug_assert_eq!(x, len);
-                        Ok(item)
-                    }
-                    Err(e) => Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("snow read msg error: {}", e),
-                    )),
-                })
+        let encrypted_msg = match ready!(this.frame.poll_next(cx)) {
+            Some(Ok(x)) => x,
+            x @ Some(Err(_)) => return Poll::Ready(x),
+            x @ None => return Poll::Ready(x),
+        };
+        if encrypted_msg.len() < TAG_LEN {
+            return Poll::Ready(Some(Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("message doesn't have aead: {:?}", encrypted_msg),
+            ))));
+        }
+        let len = encrypted_msg.len() - TAG_LEN;
+        let mut item = BytesMut::with_capacity(len);
+        item.resize(len, 0);
+
+        let ret = this
+            .transport
+            .read_message(encrypted_msg.as_ref(), item.as_mut());
+
+        match ret {
+            Ok(x) => debug_assert_eq!(x, len),
+            Err(e) => {
+                return Poll::Ready(Some(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("snow read msg error: {}", e),
+                ))))
             }
-            x => x,
-        })
+        }
+        Poll::Ready(Some(Ok(item)))
     }
 }
