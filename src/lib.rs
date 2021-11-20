@@ -13,17 +13,7 @@ use tokio_rw_stream_sink::RwStreamSink;
 use tokio_util::codec::Framed;
 use tokio_util::codec::LengthDelimitedCodec;
 
-/// Length should not exceed u32 since header is fixed to 4 bytes.
-pub fn new_snow_flakes<S: AsyncRead + AsyncWrite>(
-    stream: SnowFramed<S>,
-    length: usize,
-) -> Framed<RwStreamSink<SnowFramed<S>>, LengthDelimitedCodec> {
-    LengthDelimitedCodec::builder()
-        .little_endian()
-        .length_field_length(4)
-        .max_frame_length(length)
-        .new_framed(RwStreamSink::new(stream))
-}
+pub type SnowFlakes<S> = Framed<RwStreamSink<SnowFramed<S>>, LengthDelimitedCodec>;
 
 pin_project! {
     pub struct WinterFramed<S> {
@@ -65,7 +55,7 @@ where
         self.project().frame.poll_ready(cx)
     }
 
-    /// item.length <= 65535 - 16
+    /// item.length <= 65535 - 48
     fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
         let this = self.project();
         let crypto_len = item.len() + 48;
@@ -138,6 +128,20 @@ pin_project! {
     }
 }
 
+impl<S: AsyncRead + AsyncWrite> SnowFramed<S> {
+    /// Length should not exceed u32 since header is fixed to 4 bytes.
+    pub fn into_snow_flakes(
+        self,
+        length: usize,
+    ) -> Framed<RwStreamSink<SnowFramed<S>>, LengthDelimitedCodec> {
+        LengthDelimitedCodec::builder()
+            .little_endian()
+            .length_field_length(4)
+            .max_frame_length(length)
+            .new_framed(RwStreamSink::new(self))
+    }
+}
+
 impl<S> Sink<Bytes> for SnowFramed<S>
 where
     S: AsyncWrite,
@@ -148,25 +152,36 @@ where
         self.project().frame.poll_ready(cx)
     }
 
-    /// item.length <= 65535 - 16
-    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        let this = self.project();
-        let crypto_len = item.len() + 16;
-        let mut crypto_item = BytesMut::with_capacity(crypto_len);
-        crypto_item.resize(crypto_len, 0);
-        let ret = this
-            .transport
-            .write_message(item.as_ref(), crypto_item.as_mut());
-        match ret {
-            Ok(x) => debug_assert_eq!(x, crypto_len),
-            Err(e) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("snow write msg error: {}", e),
-                ))
+    /// item will be split and send in chunks not greater than 65535 - 16.
+    fn start_send(self: Pin<&mut Self>, mut item: Bytes) -> Result<(), Self::Error> {
+        let mut this = self.project();
+        loop {
+            let chunk_len = item.len().min(65535 - 16);
+            let chunk = item.split_to(chunk_len);
+
+            let crypto_len = chunk_len + 16;
+            let mut crypto_item = BytesMut::with_capacity(crypto_len);
+            crypto_item.resize(crypto_len, 0);
+            let ret = this
+                .transport
+                .write_message(chunk.as_ref(), crypto_item.as_mut());
+
+            match ret {
+                Ok(x) => debug_assert_eq!(x, crypto_len),
+                Err(e) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("snow write msg error: {}", e),
+                    ))
+                }
+            }
+            Pin::new(&mut this.frame).start_send(crypto_item.freeze())?;
+
+            if item.is_empty() {
+                break;
             }
         }
-        this.frame.start_send(crypto_item.freeze())
+        Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

@@ -2,7 +2,7 @@ use anyhow::{Context as AnyhowContext, Result};
 use bytes::BytesMut;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use snow_flakes::WinterFramed;
+use snowflakes::WinterFramed;
 use tokio::{
     fs,
     io::{self, AsyncBufReadExt, BufReader},
@@ -36,7 +36,8 @@ async fn client() -> Result<()> {
         .await
         .context("Send initial message failed.")?;
 
-    let mut snow_framed = winter_framed.into_snow_framed()?;
+    let snow_framed = winter_framed.into_snow_framed()?;
+    let mut snow_flakes = snow_framed.into_snow_flakes(1 << 20);
 
     loop {
         let message = match BufReader::new(io::stdin()).lines().next_line().await {
@@ -44,7 +45,7 @@ async fn client() -> Result<()> {
             _ => break,
         };
         let bytes: BytesMut = message.as_bytes().into();
-        snow_framed
+        snow_flakes
             .send(bytes.freeze())
             .await
             .context("Send message failed.")?;
@@ -70,10 +71,11 @@ async fn server() -> Result<()> {
 
     dbg!(msg);
 
-    let mut snow_framed = winter_framed.into_snow_framed()?;
+    let snow_framed = winter_framed.into_snow_framed()?;
+    let mut snow_flakes = snow_framed.into_snow_flakes(1 << 20);
 
     loop {
-        let msg = match snow_framed.next().await {
+        let msg = match snow_flakes.next().await {
             Some(x) => x.context("Get next msg failed")?,
             None => break,
         };

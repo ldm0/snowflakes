@@ -1,5 +1,5 @@
 [package]
-name = "snow_flakes"
+name = "snowflakes"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,12 +9,15 @@ edition = "2021"
 bytes = "1.1"
 futures = "0.3"
 pin-project-lite = "0.2"
-snow = "0.8.0"
+snow = "0.8"
 tokio = { version = "1.13", features = ["full"] }
-tokio-util = { version = "0.6.9", features = ["codec"] }
-tokio-rw-stream-sink = "0.4"
+tokio-util = { version = "0.6", features = ["codec"] }
+# tokio-rw-stream-sink = "0.4"
+tokio-rw-stream-sink = { path = "../tokio-rw-stream-sink" }
 
 [dev-dependencies]
 anyhow = "1.0"
 clap = "3.0.0-beta.5"
 tokio = { version = "1.13", features = ["full"] }
+snow = "0.8"
+rand = "0.8.4"
