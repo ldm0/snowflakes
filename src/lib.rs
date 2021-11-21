@@ -16,6 +16,8 @@ use tokio_util::codec::LengthDelimitedCodec;
 pub type SnowFlakes<S> = Framed<RwStreamSink<SnowFramed<S>>, LengthDelimitedCodec>;
 
 const NOISE_MSG_LEN: usize = 65535;
+/// Actually we can use 2, but extend to 3 due to the possibility of breaking: https://github.com/tokio-rs/tokio/issues/4184
+const LENGTH_FIELD_LEN: usize = 3;
 const TAG_LEN: usize = 16;
 const HANDSHAKE_LEN: usize = 48;
 
@@ -34,7 +36,7 @@ where
     pub fn new(stream: S, handshake: snow::HandshakeState) -> Self {
         let frame = LengthDelimitedCodec::builder()
             .little_endian()
-            .length_field_length(2)
+            .length_field_length(LENGTH_FIELD_LEN)
             .max_frame_length(NOISE_MSG_LEN)
             .new_framed(stream);
         Self { frame, handshake }
@@ -165,7 +167,7 @@ where
     fn start_send(self: Pin<&mut Self>, mut item: Bytes) -> Result<(), Self::Error> {
         let mut this = self.project();
         loop {
-            let chunk_len = item.len().min(NOISE_MSG_LEN - TAG_LEN);
+            let chunk_len = item.len().min(NOISE_MSG_LEN - TAG_LEN - LENGTH_FIELD_LEN);
             let chunk = item.split_to(chunk_len);
 
             let crypto_len = chunk_len + TAG_LEN;
