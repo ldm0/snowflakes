@@ -10,13 +10,14 @@ use pin_project_lite::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
+/// Framed io with noise protocol support.
 pub type SnowFlakes<S> = Framed<SnowFramed<S>, LengthDelimitedCodec>;
 
 /// Maximum length of the noise protocol.
 pub const NOISE_MSG_LEN: usize = 65535;
 /// Length of length field of a message. Actually 2 could be used, but here we
 /// use 3 due to the possibility of breaking:
-/// https://github.com/tokio-rs/tokio/issues/4184
+/// <https://github.com/tokio-rs/tokio/issues/4184>
 pub const LENGTH_FIELD_LEN: usize = 3;
 /// Tag length of `ChaCha20-Poly1305` and `AES-256-GCM`
 pub const TAG_LEN: usize = 16;
