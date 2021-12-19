@@ -4,9 +4,11 @@ use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use snowflakes::{SnowFlakes, WinterFramed};
 use std::net::Ipv4Addr as addr;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
-use tokio::time::Instant;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
+    time::Instant,
+};
 
 const PATTERN: &str = "Noise_NK_25519_AESGCM_SHA256";
 
@@ -80,7 +82,7 @@ async fn get_ready_client(port: u16, public_key: Vec<u8>) -> Result<SnowFlakes<T
         .await
         .context("Remote shutdown unexpectedly.")?
         .context("Get respond message failed.")?;
-    assert_eq!(msg, "");
+    assert_eq!(msg, b"");
     Ok(winter_framed
         .into_snow_framed()?
         .into_snow_flakes(FLAKE_SIZE))

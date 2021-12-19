@@ -10,9 +10,8 @@ bytes = "1.1"
 futures = "0.3"
 pin-project-lite = "0.2"
 snow = "0.8"
-tokio = { version = "1.13", features = ["full"] }
+tokio = "1.15"
 tokio-util = { version = "0.6", features = ["codec"] }
-tokio-rw-stream-sink = "0.5"
 
 [dev-dependencies]
 anyhow = "1.0"
