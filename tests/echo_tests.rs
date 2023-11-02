@@ -58,11 +58,8 @@ async fn echo_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>)
 
 async fn bench_server(port: u16, done: oneshot::Sender<()>, private_key: Vec<u8>) -> Result<()> {
     let mut snowflakes = get_ready_server(port, done, private_key).await?;
-    loop {
-        let _msg = match snowflakes.next().await {
-            Some(x) => x?,
-            None => break,
-        };
+    while let Some(msg) = snowflakes.next().await {
+        msg?;
     }
     Ok(())
 }
@@ -188,10 +185,11 @@ async fn bench_client(port: u16, public_key: Vec<u8>) -> Result<()> {
     let time = elapsed.as_secs_f32();
     let total = random.len() * ROUND;
     println!(
-        "time: {}, size_bytes: {}, {}MB/s",
+        "time: {}, size_bytes: {}, throughput: {}MB/s, latency: {}s",
         time,
         total,
-        total as f32 / time / 1024. / 1024.
+        total as f32 / time / 1024. / 1024.,
+        time / ROUND as f32
     );
     Ok(())
 }
